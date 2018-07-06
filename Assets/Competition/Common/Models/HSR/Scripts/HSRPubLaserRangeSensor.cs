@@ -1,23 +1,20 @@
 using UnityEngine;
 
 using System;
-using SIGVerse.ROSBridge.sensor_msgs;
-using SIGVerse.ROSBridge.std_msgs;
+using SIGVerse.RosBridge.sensor_msgs;
+using SIGVerse.RosBridge.std_msgs;
 using SIGVerse.Common;
-using SIGVerse.SIGVerseROSBridge;
+using SIGVerse.SIGVerseRosBridge;
 using System.Collections;
 using System.Threading;
-using System.Threading.Tasks;
+using SIGVerse.RosBridge;
 
 namespace SIGVerse.ToyotaHSR
 {
 	[RequireComponent(typeof (HSRPubSynchronizer))]
 
-	public class HSRPubLaserRangeSensor : MonoBehaviour
+	public class HSRPubLaserRangeSensor : SIGVerseRosBridgePubMessage
 	{
-		public string rosBridgeIP;
-		public int sigverseBridgePort;
-
 		public string topicName;
 
 		[TooltipAttribute("milliseconds")]
@@ -38,6 +35,8 @@ namespace SIGVerse.ToyotaHSR
 		private const float LaserAngle = HalfOfLaserAngle * 2.0f;
 		private const float LaserAngularResolution = 0.25f;
 
+		private HSRPubSynchronizer synchronizer;
+
 		private int publishSequenceNumber;
 
 		private int numLines;
@@ -45,7 +44,7 @@ namespace SIGVerse.ToyotaHSR
 		private System.Net.Sockets.TcpClient tcpClient = null;
 		private System.Net.Sockets.NetworkStream networkStream = null;
 
-		SIGVerseROSBridgeMessage<LaserScanForSIGVerseBridge> laserScanMsg;
+		SIGVerseRosBridgeMessage<LaserScanForSIGVerseBridge> laserScanMsg;
 
 		private LaserScanForSIGVerseBridge laserScan;
 
@@ -56,31 +55,41 @@ namespace SIGVerse.ToyotaHSR
 
 		private bool isPublishing = false;
 
+		private bool shouldSendMessage = false;
+
+		private bool isUsingThread;
+
 
 		void Awake()
 		{
-			this.publishSequenceNumber = HSRPubSynchronizer.GetAssignedSequenceNumber();
+			this.synchronizer = this.GetComponent<HSRPubSynchronizer>();
+
+			this.publishSequenceNumber = this.synchronizer.GetAssignedSequenceNumber();
+
+			this.isUsingThread = this.synchronizer.useThread;
 		}
 
-		void Start()
+		protected override void Start()
 		{
-			if (this.rosBridgeIP.Equals(string.Empty))
-			{
-				this.rosBridgeIP        = ConfigManager.Instance.configInfo.rosbridgeIP;
-			}
-			if (this.sigverseBridgePort == 0)
-			{
-				this.sigverseBridgePort = ConfigManager.Instance.configInfo.sigverseBridgePort;
-			}
+			base.Start();
 
-			this.tcpClient = HSRCommon.GetSIGVerseRosbridgeConnection(this.rosBridgeIP, this.sigverseBridgePort);
+			if(!RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.ContainsKey(topicName))
+			{
+				this.tcpClient = SIGVerseRosBridgeConnection.GetConnection(this.rosBridgeIP, this.sigverseBridgePort);
+
+				RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.Add(topicName, this.tcpClient);
+			}
+			else
+			{
+				this.tcpClient = RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap[topicName];
+			}
 
 			this.networkStream = this.tcpClient.GetStream();
 
 			this.networkStream.ReadTimeout  = 100000;
 			this.networkStream.WriteTimeout = 100000;
 
-			this.header = new Header(0, new SIGVerse.ROSBridge.msg_helpers.Time(0, 0), this.sensorLink.name);
+			this.header = new Header(0, new SIGVerse.RosBridge.msg_helpers.Time(0, 0), this.sensorLink.name);
 
 			this.laserScan = new LaserScanForSIGVerseBridge();
 
@@ -98,20 +107,20 @@ namespace SIGVerse.ToyotaHSR
 			this.laserScan.ranges      = new double[this.numLines];
 			this.laserScan.intensities = new double[this.numLines];
 
-			this.laserScanMsg = new SIGVerseROSBridgeMessage<LaserScanForSIGVerseBridge>("publish", this.topicName, LaserScanForSIGVerseBridge.GetMessageType(), this.laserScan);
+			this.laserScanMsg = new SIGVerseRosBridgeMessage<LaserScanForSIGVerseBridge>("publish", this.topicName, LaserScanForSIGVerseBridge.GetMessageType(), this.laserScan);
 
 //			Debug.Log("this.layerMask.value = "+this.layerMask.value);
 		}
 
-		void OnDestroy()
-		{
-			if (this.networkStream != null) { this.networkStream.Close(); }
-			if (this.tcpClient != null) { this.tcpClient.Close(); }
-		}
+		//void OnDestroy()
+		//{
+		//	if (this.networkStream != null) { this.networkStream.Close(); }
+		//	if (this.tcpClient != null) { this.tcpClient.Close(); }
+		//}
 
 		void Update()
 		{
-			if(this.tcpClient==null) { return; }
+			if(!this.IsConnected()) { return; }
 
 			this.elapsedTime += UnityEngine.Time.deltaTime;
 
@@ -120,21 +129,29 @@ namespace SIGVerse.ToyotaHSR
 				return;
 			}
 
-			if(!HSRPubSynchronizer.CanExecute(this.publishSequenceNumber)) { return; }
+			if(!this.synchronizer.CanExecute(this.publishSequenceNumber)) { return; }
 
-			this.isPublishing = true;
 			this.elapsedTime = 0.0f;
 
-			StartCoroutine(this.PubSensorData());
+			this.shouldSendMessage = true;
 		}
 
-
-		private IEnumerator PubSensorData()
+		void LateUpdate()
 		{
-			yield return new WaitForEndOfFrame();
+			if(this.shouldSendMessage)
+			{
+				this.shouldSendMessage = false;
 
+				this.PubSensorData();
+			}
+		}
+
+		private void PubSensorData()
+		{
 //			System.Diagnostics.Stopwatch sw = new System.Diagnostics.Stopwatch();
 //			sw.Start();
+
+			this.isPublishing = true;
 
 			// Set current time to the header
 			this.laserScan.header.Update();
@@ -164,14 +181,41 @@ namespace SIGVerse.ToyotaHSR
 
 			this.laserScanMsg.msg = this.laserScan;
 
-			Task.Run(() => 
+			if(this.isUsingThread)
 			{
-				this.laserScanMsg.SendMsg(this.networkStream);
-				this.isPublishing = false;
-			});
+				Thread thread = new Thread(new ThreadStart(SendSensorData));
+				thread.Start();
+			}
+			else
+			{
+				this.SendSensorData();
+			}
 
 //			sw.Stop();
 //			Debug.Log("LRF sending time=" + sw.Elapsed);
+		}
+
+		private void SendSensorData()
+		{
+			this.laserScanMsg.SendMsg(this.networkStream);
+			this.isPublishing = false;
+		}
+
+
+		public override bool IsConnected()
+		{
+			return this.networkStream != null && this.tcpClient.Connected;
+		}
+
+		public override void Close()
+		{
+			if (this.networkStream != null) { this.networkStream.Close(); }
+			if (this.tcpClient     != null) { this.tcpClient.Close(); }
+		}
+
+		void OnApplicationQuit()
+		{
+			this.Close();
 		}
 	}
 }

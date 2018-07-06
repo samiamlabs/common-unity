@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using SIGVerse.Common;
 using System.Linq;
+using System.Text;
 
 namespace SIGVerse.Competition
 {
@@ -43,6 +44,9 @@ namespace SIGVerse.Competition
 
 		private List<Transform>  transformOrder;
 
+		public bool IsRigidbodiesDisable{ get; set; }
+		public bool IsCollidersDisable  { get; set; }
+
 		
 		public PlaybackTransformEventController(WorldPlaybackCommon playbackCommon)
 		{
@@ -55,10 +59,12 @@ namespace SIGVerse.Competition
 
 			foreach (Transform targetTransform in this.targetTransforms)
 			{
-				this.targetTransformPathMap.Add(WorldPlaybackCommon.GetLinkPath(targetTransform), targetTransform);
+				this.targetTransformPathMap.Add(SIGVerseUtils.GetHierarchyPath(targetTransform), targetTransform);
 			}
+
+			this.IsRigidbodiesDisable = true;
+			this.IsCollidersDisable   = true;
 		}
-		
 
 		public override void StartInitializingEvents()
 		{
@@ -71,21 +77,27 @@ namespace SIGVerse.Competition
 			foreach (Transform targetTransform in this.targetTransforms)
 			{
 				// Disable rigidbodies
-				Rigidbody[] rigidbodies = targetTransform.GetComponentsInChildren<Rigidbody>(true);
-
-				foreach (Rigidbody rigidbody in rigidbodies)
+				if(this.IsRigidbodiesDisable)
 				{
-					rigidbody.isKinematic     = true;
-					rigidbody.velocity        = Vector3.zero;
-					rigidbody.angularVelocity = Vector3.zero;
+					Rigidbody[] rigidbodies = targetTransform.GetComponentsInChildren<Rigidbody>(true);
+
+					foreach (Rigidbody rigidbody in rigidbodies)
+					{
+						rigidbody.isKinematic     = true;
+						rigidbody.velocity        = Vector3.zero;
+						rigidbody.angularVelocity = Vector3.zero;
+					}
 				}
 
 				// Disable colliders
-				Collider[] colliders = targetTransform.GetComponentsInChildren<Collider>(true);
-
-				foreach (Collider collider in colliders)
+				if(this.IsCollidersDisable)
 				{
-					collider.enabled = false;
+					Collider[] colliders = targetTransform.GetComponentsInChildren<Collider>(true);
+
+					foreach (Collider collider in colliders)
+					{
+						collider.enabled = false;
+					}
 				}
 			}
 		}
@@ -160,6 +172,43 @@ namespace SIGVerse.Competition
 		public List<Transform> GetTargetTransforms()
 		{
 			return this.targetTransforms;
+		}
+
+
+		public static string GetDefinitionLine(List<Transform> targetTransforms)
+		{
+			string definitionLine = "0.0," + WorldPlaybackCommon.DataType1Transform + "," + WorldPlaybackCommon.DataType2TransformDef; // Elapsed time is dummy.
+
+			foreach (Transform targetTransform in targetTransforms)
+			{
+				// Make a header line
+				definitionLine += "\t" + SIGVerseUtils.GetHierarchyPath(targetTransform);
+			}
+
+			return definitionLine;
+		}
+
+		public static string GetDataLine(string elapsedTime, List<Transform> targetTransforms)
+		{
+			StringBuilder stringBuilder = new StringBuilder();
+
+			stringBuilder.Append(elapsedTime).Append(",").Append(WorldPlaybackCommon.DataType1Transform).Append(",").Append(WorldPlaybackCommon.DataType2TransformVal);
+
+			foreach (Transform transform in targetTransforms)
+			{
+				stringBuilder.Append("\t")
+					.Append(Math.Round(transform.position.x,    4, MidpointRounding.AwayFromZero)).Append(",")
+					.Append(Math.Round(transform.position.y,    4, MidpointRounding.AwayFromZero)).Append(",")
+					.Append(Math.Round(transform.position.z,    4, MidpointRounding.AwayFromZero)).Append(",")
+					.Append(Math.Round(transform.eulerAngles.x, 4, MidpointRounding.AwayFromZero)).Append(",")
+					.Append(Math.Round(transform.eulerAngles.y, 4, MidpointRounding.AwayFromZero)).Append(",")
+					.Append(Math.Round(transform.eulerAngles.z, 4, MidpointRounding.AwayFromZero)).Append(",")
+					.Append(Math.Round(transform.localScale.x,  4, MidpointRounding.AwayFromZero)).Append(",")
+					.Append(Math.Round(transform.localScale.y,  4, MidpointRounding.AwayFromZero)).Append(",")
+					.Append(Math.Round(transform.localScale.z,  4, MidpointRounding.AwayFromZero));
+			}
+
+			return stringBuilder.ToString();
 		}
 	}
 }

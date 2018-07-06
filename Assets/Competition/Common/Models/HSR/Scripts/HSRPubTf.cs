@@ -3,21 +3,18 @@ using UnityEngine;
 using System;
 using System.Collections;
 using SIGVerse.Common;
-using SIGVerse.SIGVerseROSBridge;
-using SIGVerse.ROSBridge.geometry_msgs;
+using SIGVerse.SIGVerseRosBridge;
+using SIGVerse.RosBridge.geometry_msgs;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
+using SIGVerse.RosBridge;
 
 namespace SIGVerse.ToyotaHSR
 {
 	[RequireComponent(typeof (HSRPubSynchronizer))]
 
-	public class HSRPubTf : MonoBehaviour
+	public class HSRPubTf : SIGVerseRosBridgePubMessage
 	{
-		public string rosBridgeIP;
-		public int sigverseBridgePort;
-
 		public string topicName;
 
 		[TooltipAttribute("milliseconds")]
@@ -54,18 +51,24 @@ namespace SIGVerse.ToyotaHSR
 			}
 		}
 
+		private HSRPubSynchronizer synchronizer;
+
 		private int publishSequenceNumber;
 
 		private System.Net.Sockets.TcpClient tcpClient = null;
 		private System.Net.Sockets.NetworkStream networkStream = null;
 
-		private SIGVerseROSBridgeMessage<TransformStamped[]> transformStampedMsg = null;
+		private SIGVerseRosBridgeMessage<TransformStamped[]> transformStampedMsg = null;
 
 		private List<TfInfo> localTfInfoList = new List<TfInfo>();
 
 		private float elapsedTime;
 
 		private bool isPublishing = false;
+
+		private bool shouldSendMessage = false;
+
+		private bool isUsingThread;
 
 
 		void Awake()
@@ -84,39 +87,45 @@ namespace SIGVerse.ToyotaHSR
 				this.localTfInfoList.Add(localTfInfo);
 			}
 
-			this.publishSequenceNumber = HSRPubSynchronizer.GetAssignedSequenceNumber();
+			this.synchronizer = this.GetComponent<HSRPubSynchronizer>();
+
+			this.publishSequenceNumber = this.synchronizer.GetAssignedSequenceNumber();
+
+			this.isUsingThread = this.synchronizer.useThread;
 		}
 
-		void Start()
+		protected override void Start()
 		{
-			if (this.rosBridgeIP.Equals(string.Empty))
-			{
-				this.rosBridgeIP        = ConfigManager.Instance.configInfo.rosbridgeIP;
-			}
-			if (this.sigverseBridgePort == 0)
-			{
-				this.sigverseBridgePort = ConfigManager.Instance.configInfo.sigverseBridgePort;
-			}
+			base.Start();
 
-			this.tcpClient = HSRCommon.GetSIGVerseRosbridgeConnection(this.rosBridgeIP, this.sigverseBridgePort);
+			if(!RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.ContainsKey(topicName))
+			{
+				this.tcpClient = SIGVerseRosBridgeConnection.GetConnection(this.rosBridgeIP, this.sigverseBridgePort);
+
+				RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.Add(topicName, this.tcpClient);
+			}
+			else
+			{
+				this.tcpClient = RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap[topicName];
+			}
 
 			this.networkStream = this.tcpClient.GetStream();
 
 			this.networkStream.ReadTimeout  = 100000;
 			this.networkStream.WriteTimeout = 100000;
 
-			this.transformStampedMsg = new SIGVerseROSBridgeMessage<TransformStamped[]>("publish", this.topicName, "sigverse/TfList", null);
+			this.transformStampedMsg = new SIGVerseRosBridgeMessage<TransformStamped[]>("publish", this.topicName, "sigverse/TfList", null);
 		}
 
-		void OnDestroy()
-		{
-			if (this.networkStream != null) { this.networkStream.Close(); }
-			if (this.tcpClient     != null) { this.tcpClient.Close(); }
-		}
+		//void OnDestroy()
+		//{
+		//	if (this.networkStream != null) { this.networkStream.Close(); }
+		//	if (this.tcpClient     != null) { this.tcpClient.Close(); }
+		//}
 
 		void Update()
 		{
-			if(this.tcpClient==null) { return; }
+			if(!this.IsConnected()) { return; }
 
 			this.elapsedTime += UnityEngine.Time.deltaTime;
 
@@ -125,20 +134,29 @@ namespace SIGVerse.ToyotaHSR
 				return;
 			}
 
-			if(!HSRPubSynchronizer.CanExecute(this.publishSequenceNumber)) { return; }
+			if(!this.synchronizer.CanExecute(this.publishSequenceNumber)) { return; }
 
-			this.isPublishing = true;
 			this.elapsedTime = 0.0f;
 
-			StartCoroutine(this.PubTF());
+			this.shouldSendMessage = true;
 		}
 
-		private IEnumerator PubTF()
+		void LateUpdate()
 		{
-			yield return new WaitForEndOfFrame();
+			if(this.shouldSendMessage)
+			{
+				this.shouldSendMessage = false;
 
+				this.PubTF();
+			}
+		}
+
+		private void PubTF()
+		{
 //			System.Diagnostics.Stopwatch sw = new System.Diagnostics.Stopwatch();
 //			sw.Start();
+
+			this.isPublishing = true;
 
 			TransformStamped[] transformStampedArray = new TransformStamped[localTfInfoList.Count];
 
@@ -154,14 +172,42 @@ namespace SIGVerse.ToyotaHSR
 
 			this.transformStampedMsg.msg = transformStampedArray;
 
-			Task.Run(() => 
+			if(this.isUsingThread)
 			{
-				this.transformStampedMsg.SendMsg(this.networkStream);
-				this.isPublishing = false;
-			});
+				Thread thread = new Thread(new ThreadStart(SendTF));
+				thread.Start();
+			}
+			else
+			{
+				this.SendTF();
+			}
 
 //			sw.Stop();
 //			Debug.Log("tf sending time="+sw.Elapsed);
+		}
+
+
+		private void SendTF()
+		{
+			this.transformStampedMsg.SendMsg(this.networkStream);
+			this.isPublishing = false;
+		}
+
+
+		public override bool IsConnected()
+		{
+			return this.networkStream !=null && this.tcpClient.Connected;
+		}
+
+		public override void Close()
+		{
+			if (this.networkStream != null) { this.networkStream.Close(); }
+			if (this.tcpClient     != null) { this.tcpClient.Close(); }
+		}
+
+		void OnApplicationQuit()
+		{
+			this.Close();
 		}
 	}
 }

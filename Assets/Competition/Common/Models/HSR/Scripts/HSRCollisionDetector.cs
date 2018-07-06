@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using SIGVerse.Common;
+using SIGVerse.Competition;
 using UnityEngine.EventSystems;
 
 namespace SIGVerse.ToyotaHSR
 {
 	public interface IHSRCollisionHandler : IEventSystemHandler
 	{
-		void OnHsrCollisionEnter(Vector3 contactPoint);
+		void OnHsrCollisionEnter(Collision collision, float collisionVelocity, float effectScale);
 	}
 
 
@@ -21,16 +22,23 @@ namespace SIGVerse.ToyotaHSR
 
 		public List<string> exclusionColliderTags;
 
-		public GameObject collisionEffect;
-
 		//------------------------
+
+		private GameObject collisionEffect;
 
 		private List<Collider> exclusionColliderList;
 
 		private float collidedTime;
 
+		private Collider[] colliders;
+		private float[]    colliderVelocities;
+		private Vector3[]  prePoss;
+
+
 		protected void Awake()
 		{
+			this.collisionEffect = (GameObject)Resources.Load(CompetitionUtils.CollisionEffectPath);
+
 			this.exclusionColliderList = new List<Collider>();
 
 			foreach(string exclusionColliderTag in exclusionColliderTags)
@@ -44,24 +52,42 @@ namespace SIGVerse.ToyotaHSR
 					this.exclusionColliderList.AddRange(colliders);
 				}
 			}
+
+			this.colliders = this.GetComponentsInChildren<Collider>();
+			this.colliderVelocities  = new float[this.colliders.Length];
+			this.prePoss = new Vector3[this.colliders.Length];
+
+			SIGVerseLogger.Info("HSR collider count=" + this.colliders.Length);
 		}
 
 		// Use this for initialization
 		void Start()
 		{
 			this.collidedTime = 0.0f;
-//			Debug.Log("HSRCollisionDetector:"+this.graspables.Count);
+
+			for(int i=0; i<this.colliders.Length; i++)
+			{
+				this.colliderVelocities[i] = 0.0f;
+
+				this.prePoss[i] = this.colliders[i].transform.position;
+			}
 		}
 
 		// Update is called once per frame
-		void Update()
+		void FixedUpdate()
 		{
+			for (int i=0; i<this.colliders.Length; i++)
+			{
+				this.colliderVelocities[i] = (this.colliders[i].transform.position - this.prePoss[i]).magnitude / Time.fixedDeltaTime;
+
+				this.prePoss[i] = this.colliders[i].transform.position;
+			}
 		}
 
 
 		void OnCollisionEnter(Collision collision)
 		{
-			if(Time.time - this.collidedTime < CollisionInterval) { return; }
+			if (Time.time - this.collidedTime < CollisionInterval) { return; }
 
 			if(collision.collider.transform.root==this.transform.root) { return; }
 
@@ -78,14 +104,19 @@ namespace SIGVerse.ToyotaHSR
 
 		private void ExecCollisionProcess(Collision collision)
 		{
-			SIGVerseLogger.Info("Collision detection! Collided object="+collision.collider.name);
+			float collisionVelocity = this.colliderVelocities[Array.IndexOf(this.colliders, collision.contacts[0].thisCollider)];
+
+			SIGVerseLogger.Info("HSR Collision Detection! Time=" + Time.time + ", Collision Velocity=" + collisionVelocity + 
+				", Part=" +collision.contacts[0].thisCollider.name + ", Collided object=" + SIGVerseUtils.GetHierarchyPath(collision.collider.transform));
 
 			// Effect
 			GameObject effect = MonoBehaviour.Instantiate(this.collisionEffect);
 			
-			Vector3 contactPoint = this.CalcContactPoint(collision);
+			Vector3 contactPoint = SIGVerseUtils.CalcContactAveragePoint(collision);
 
 			effect.transform.position = contactPoint;
+			effect.transform.localScale = new Vector3(0.5f, 0.5f, 0.5f);
+
 			Destroy(effect, 1.0f);
 
 			// Send the collision notification
@@ -95,27 +126,11 @@ namespace SIGVerse.ToyotaHSR
 				(
 					target: destination,
 					eventData: null,
-					functor: (reciever, eventData) => reciever.OnHsrCollisionEnter(contactPoint)
+					functor: (reciever, eventData) => reciever.OnHsrCollisionEnter(collision, collisionVelocity,  0.5f)
 				);
 			}
 
 			this.collidedTime = Time.time;
-		}
-
-		private Vector3 CalcContactPoint(Collision collision)
-		{
-			ContactPoint[] contactPoints = collision.contacts;
-
-			Vector3 contactPointAve = Vector3.zero;
-
-			foreach(ContactPoint contactPoint in contactPoints)
-			{
-				contactPointAve += contactPoint.point;
-			}
-
-			contactPointAve /= contactPoints.Length;
-
-			return contactPointAve;
 		}
 	}
 }

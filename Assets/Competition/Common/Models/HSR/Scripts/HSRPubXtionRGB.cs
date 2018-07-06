@@ -2,33 +2,18 @@ using UnityEngine;
 
 using System;
 using System.Collections;
-using SIGVerse.ROSBridge.sensor_msgs;
-using SIGVerse.ROSBridge.std_msgs;
+using SIGVerse.RosBridge.sensor_msgs;
+using SIGVerse.RosBridge.std_msgs;
 using SIGVerse.Common;
-using SIGVerse.SIGVerseROSBridge;
+using SIGVerse.SIGVerseRosBridge;
 using System.Threading;
-using System.Threading.Tasks;
+using SIGVerse.RosBridge;
 
 namespace SIGVerse.ToyotaHSR
 {
-	[RequireComponent(typeof (HSRPubSynchronizer))]
-
 	public class HSRPubXtionRGB : MonoBehaviour
 	{
-		public string rosBridgeIP;
-		public int sigverseBridgePort;
-
-		public GameObject rgbCamera;
-
-		public string topicNameCameraInfo;
-		public string topicNameImage;
-
-		[TooltipAttribute("milliseconds")]
-		public float sendingInterval = 100;
-
 		//--------------------------------------------------
-
-		private int publishSequenceNumber;
 
 		private System.Net.Sockets.TcpClient tcpClientCameraInfo = null;
 		private System.Net.Sockets.TcpClient tcpClientImage      = null;
@@ -36,8 +21,10 @@ namespace SIGVerse.ToyotaHSR
 		private System.Net.Sockets.NetworkStream networkStreamCameraInfo = null;
 		private System.Net.Sockets.NetworkStream networkStreamImage      = null;
 
-		SIGVerseROSBridgeMessage<CameraInfoForSIGVerseBridge> cameraInfoMsg = null;
-		SIGVerseROSBridgeMessage<ImageForSIGVerseBridge>      imageMsg      = null;
+		private SIGVerseRosBridgeMessage<CameraInfoForSIGVerseBridge> cameraInfoMsg = null;
+		private SIGVerseRosBridgeMessage<ImageForSIGVerseBridge>      imageMsg      = null;
+
+		private GameObject cameraFrameObj;
 
 		// Xtion
 		private Camera xtionRGBCamera;
@@ -54,26 +41,39 @@ namespace SIGVerse.ToyotaHSR
 		private bool isPublishingCameraInfo = false;
 		private bool isPublishingImage      = false;
 
+		private bool shouldSendMessage = false;
+
+		private bool isUsingThread;
+
 
 		void Awake()
 		{
-			this.publishSequenceNumber = HSRPubSynchronizer.GetAssignedSequenceNumber();
+			this.cameraFrameObj = this.transform.parent.gameObject;
 		}
 
-		void Start()
+		public void Initialize(string rosBridgeIP, int sigverseBridgePort, string topicNameCameraInfo, string topicNameImage, bool isUsingThread)
 		{
-			if (this.rosBridgeIP.Equals(string.Empty))
+			if(!RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.ContainsKey(topicNameCameraInfo))
 			{
-				this.rosBridgeIP        = ConfigManager.Instance.configInfo.rosbridgeIP;
+				this.tcpClientCameraInfo = SIGVerseRosBridgeConnection.GetConnection(rosBridgeIP, sigverseBridgePort);
+
+				RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.Add(topicNameCameraInfo, this.tcpClientCameraInfo);
 			}
-			if (this.sigverseBridgePort == 0)
+			else
 			{
-				this.sigverseBridgePort = ConfigManager.Instance.configInfo.sigverseBridgePort;
+				this.tcpClientCameraInfo = RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap[topicNameCameraInfo];
 			}
+			
+			if(!RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.ContainsKey(topicNameImage))
+			{
+				this.tcpClientImage = SIGVerseRosBridgeConnection.GetConnection(rosBridgeIP, sigverseBridgePort);
 
-
-			this.tcpClientCameraInfo = HSRCommon.GetSIGVerseRosbridgeConnection(this.rosBridgeIP, this.sigverseBridgePort);
-			this.tcpClientImage      = HSRCommon.GetSIGVerseRosbridgeConnection(this.rosBridgeIP, this.sigverseBridgePort);
+				RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.Add(topicNameImage, this.tcpClientImage);
+			}
+			else
+			{
+				this.tcpClientImage = RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap[topicNameImage];
+			}
 
 			this.networkStreamCameraInfo = this.tcpClientCameraInfo.GetStream();
 			this.networkStreamCameraInfo.ReadTimeout  = 100000;
@@ -84,7 +84,7 @@ namespace SIGVerse.ToyotaHSR
 			this.networkStreamImage.WriteTimeout = 100000;
 
 			// RGB Camera
-			this.xtionRGBCamera = this.rgbCamera.GetComponentInChildren<Camera>();
+			this.xtionRGBCamera = this.cameraFrameObj.GetComponentInChildren<Camera>();
 
 			int imageWidth  = this.xtionRGBCamera.targetTexture.width;
 			int imageHeight = this.xtionRGBCamera.targetTexture.height;
@@ -116,14 +116,40 @@ namespace SIGVerse.ToyotaHSR
 
 			this.imageData = new ImageForSIGVerseBridge(null, (uint)imageHeight, (uint)imageWidth, encoding, isBigendian, step, null);
 
-			this.header = new Header(0, new SIGVerse.ROSBridge.msg_helpers.Time(0, 0), this.rgbCamera.name);
+			this.header = new Header(0, new SIGVerse.RosBridge.msg_helpers.Time(0, 0), this.cameraFrameObj.name);
 
 
-			this.cameraInfoMsg = new SIGVerseROSBridgeMessage<CameraInfoForSIGVerseBridge>("publish", this.topicNameCameraInfo, CameraInfoForSIGVerseBridge.GetMessageType(), this.cameraInfoData);
-			this.imageMsg      = new SIGVerseROSBridgeMessage<ImageForSIGVerseBridge>     ("publish", this.topicNameImage,      ImageForSIGVerseBridge.GetMessageType(),      this.imageData);
+			this.cameraInfoMsg = new SIGVerseRosBridgeMessage<CameraInfoForSIGVerseBridge>("publish", topicNameCameraInfo, CameraInfoForSIGVerseBridge.GetMessageType(), this.cameraInfoData);
+			this.imageMsg      = new SIGVerseRosBridgeMessage<ImageForSIGVerseBridge>     ("publish", topicNameImage,      ImageForSIGVerseBridge.GetMessageType(),      this.imageData);
+
+			this.isUsingThread = isUsingThread;
 		}
 
-		void OnDestroy()
+		//void OnDestroy()
+		//{
+		//	if (this.networkStreamCameraInfo != null) { this.networkStreamCameraInfo.Close(); }
+		//	if (this.networkStreamImage      != null) { this.networkStreamImage     .Close(); }
+
+		//	if (this.tcpClientCameraInfo != null) { this.tcpClientCameraInfo.Close(); }
+		//	if (this.tcpClientImage      != null) { this.tcpClientImage     .Close(); }
+		//}
+
+		public void SendMessageInThisFrame()
+		{
+			this.shouldSendMessage = true;
+		}
+
+		public bool IsConnected()
+		{
+			return this.tcpClientCameraInfo.Connected && this.tcpClientImage.Connected && this.networkStreamCameraInfo != null && this.networkStreamImage !=null;
+		}
+
+		public bool IsPublishing()
+		{
+			return this.isPublishingCameraInfo || this.isPublishingImage;
+		}
+
+		public void Close()
 		{
 			if (this.networkStreamCameraInfo != null) { this.networkStreamCameraInfo.Close(); }
 			if (this.networkStreamImage      != null) { this.networkStreamImage     .Close(); }
@@ -132,31 +158,28 @@ namespace SIGVerse.ToyotaHSR
 			if (this.tcpClientImage      != null) { this.tcpClientImage     .Close(); }
 		}
 
-		void Update()
+
+
+		//void Update()
+		//{
+		//}
+
+		void OnPostRender()
 		{
-			if(this.networkStreamCameraInfo==null || this.networkStreamImage==null) { return; }
-
-			this.elapsedTime += UnityEngine.Time.deltaTime;
-
-			if (this.isPublishingCameraInfo || this.isPublishingImage || this.elapsedTime < this.sendingInterval * 0.001f)
+			if(this.shouldSendMessage)
 			{
-				return;
+				this.shouldSendMessage = false;
+
+				this.PubImage();
 			}
-
-			if(!HSRPubSynchronizer.CanExecute(this.publishSequenceNumber)) { return; }
-
-			this.isPublishingCameraInfo = true;
-			this.isPublishingImage      = true;
-
-			this.elapsedTime = 0.0f;
-
-			StartCoroutine(this.PubImage());
 		}
 
 
-		private IEnumerator PubImage()
+		private void PubImage()
 		{
-			yield return new WaitForEndOfFrame();
+			this.isPublishingCameraInfo = true;
+			this.isPublishingImage      = true;
+
 
 			// Set a terget texture as a target of rendering
 			RenderTexture.active = this.xtionRGBCamera.targetTexture;
@@ -182,11 +205,15 @@ namespace SIGVerse.ToyotaHSR
 			this.cameraInfoData.header = this.header;
 			this.cameraInfoMsg.msg = this.cameraInfoData;
 
-			Task.Run(() => 
+			if(this.isUsingThread)
 			{
-				this.cameraInfoMsg.SendMsg(this.networkStreamCameraInfo);
-				this.isPublishingCameraInfo = false;
-			});
+				Thread threadCameraInfo = new Thread(new ThreadStart(SendCameraInfo));
+				threadCameraInfo.Start();
+			}
+			else
+			{
+				this.SendCameraInfo();
+			}
 
 
 //			yield return null;
@@ -196,11 +223,28 @@ namespace SIGVerse.ToyotaHSR
 			this.imageData.data = rgbBytes;
 			this.imageMsg.msg = this.imageData;
 
-			Task.Run(() => 
+			if(this.isUsingThread)
 			{
-				this.imageMsg.SendMsg(this.networkStreamImage);
-				this.isPublishingImage = false;
-			});
+				Thread threadImage = new Thread(new ThreadStart(SendImage));
+				threadImage.Start();
+			}
+			else
+			{
+				this.SendImage();
+			}
+		}
+
+
+		private void SendCameraInfo()
+		{
+			this.cameraInfoMsg.SendMsg(this.networkStreamCameraInfo);
+			this.isPublishingCameraInfo = false;
+		}
+
+		private void SendImage()
+		{
+			this.imageMsg.SendMsg(this.networkStreamImage);
+			this.isPublishingImage = false;
 		}
 	}
 }

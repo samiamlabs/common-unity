@@ -6,29 +6,33 @@ namespace SIGVerse.ToyotaHSR
 {
 	public class HSRPubSynchronizer : MonoBehaviour
 	{
-		private static int sequenceNumberForAssignment = 0;
+		public bool useThread = false;
 
-		private static bool executed = false;
+		//-------------------------------------
 
-		private static List<int> waitingSequenceNumbers = new List<int>();
+		private int sequenceNumberForAssignment = 0;
 
-		private static bool isInitialized = false;
+		private bool executed = false;
+
+		private List<int> waitingSequenceNumbers = new List<int>();
+
+		private bool isInitialized = false;
 
 		void Start()
 		{
 			isInitialized = true;
 		}
 
-		public static int GetAssignedSequenceNumber()
+		public int GetAssignedSequenceNumber()
 		{
-			if(isInitialized) { throw new Exception("Please call " + System.Reflection.MethodBase.GetCurrentMethod().Name + " in Awake. (" + nameof(HSRPubSynchronizer) + ")"); }
+			if(isInitialized) { throw new Exception("Please call " + System.Reflection.MethodBase.GetCurrentMethod().Name + " in Awake. ("+this.GetType().FullName+")"); }
 
 			sequenceNumberForAssignment++;
 
 			return sequenceNumberForAssignment;
 		}
 
-		public static bool CanExecute(int sequenceNumber)
+		public bool CanExecute(int sequenceNumber)
 		{
 			if (!executed && (waitingSequenceNumbers.Count==0 || waitingSequenceNumbers[0]==sequenceNumber))
 			{
@@ -55,17 +59,6 @@ namespace SIGVerse.ToyotaHSR
 		void LateUpdate()
 		{
 			executed = false;
-		}
-
-		private void OnDestroy()
-		{
-			sequenceNumberForAssignment = 0;
-
-			executed = false;
-
-			waitingSequenceNumbers = new List<int>();
-
-			isInitialized = false;
 		}
 	}
 }

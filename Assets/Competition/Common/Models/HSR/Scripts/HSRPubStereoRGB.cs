@@ -2,30 +2,33 @@ using UnityEngine;
 
 using System;
 using System.Collections;
-using SIGVerse.ROSBridge.sensor_msgs;
-using SIGVerse.ROSBridge.std_msgs;
+using SIGVerse.RosBridge.sensor_msgs;
+using SIGVerse.RosBridge.std_msgs;
 using SIGVerse.Common;
-using SIGVerse.SIGVerseROSBridge;
-using System.Threading.Tasks;
+using SIGVerse.SIGVerseRosBridge;
+using System.Threading;
+using SIGVerse.RosBridge;
 
 namespace SIGVerse.ToyotaHSR
 {
-	public class HSRStereoCameraData
+	public class HSRPubStereoRGB : MonoBehaviour
 	{
+		//--------------------------------------------------
+
 		private System.Net.Sockets.TcpClient tcpClientCameraInfo = null;
 		private System.Net.Sockets.TcpClient tcpClientImage      = null;
 
 		private System.Net.Sockets.NetworkStream networkStreamCameraInfo = null;
 		private System.Net.Sockets.NetworkStream networkStreamImage      = null;
 
-		private SIGVerseROSBridgeMessage<CameraInfoForSIGVerseBridge> cameraInfoMsg = null;
-		private SIGVerseROSBridgeMessage<ImageForSIGVerseBridge>      imageMsg      = null;
+		private SIGVerseRosBridgeMessage<CameraInfoForSIGVerseBridge> cameraInfoMsg = null;
+		private SIGVerseRosBridgeMessage<ImageForSIGVerseBridge>      imageMsg      = null;
 
-		// Camera
+		private GameObject cameraFrameObj;
+
 		private Camera rgbCamera;
 		private Texture2D imageTexture;
 
-		// TimeStamp
 		private Header header;
 
 		private CameraInfoForSIGVerseBridge cameraInfoData;
@@ -33,14 +36,42 @@ namespace SIGVerse.ToyotaHSR
 
 		private byte[] rgbBytes;
 
-		private bool isPublishingCameraInfo;
-		private bool isPublishingImage;
+		private bool isPublishingCameraInfo = false;
+		private bool isPublishingImage      = false;
+
+		private bool shouldSendMessage = false;
+
+		private bool isUsingThread;
 
 
-		public HSRStereoCameraData(string rosBridgeIP, int sigverseBridgePort, GameObject cameraObj, string topicNameCameraInfo, string topicNameImage, bool isRight)
+		void Awake()
 		{
-			this.tcpClientCameraInfo = HSRCommon.GetSIGVerseRosbridgeConnection(rosBridgeIP, sigverseBridgePort);
-			this.tcpClientImage      = HSRCommon.GetSIGVerseRosbridgeConnection(rosBridgeIP, sigverseBridgePort);
+			this.cameraFrameObj = this.transform.parent.gameObject;
+		}
+
+		public void Initialize(string rosBridgeIP, int sigverseBridgePort, string topicNameCameraInfo, string topicNameImage, bool isRight, bool isUsingThread)
+		{
+			if(!RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.ContainsKey(topicNameCameraInfo))
+			{
+				this.tcpClientCameraInfo = SIGVerseRosBridgeConnection.GetConnection(rosBridgeIP, sigverseBridgePort);
+
+				RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.Add(topicNameCameraInfo, this.tcpClientCameraInfo);
+			}
+			else
+			{
+				this.tcpClientCameraInfo = RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap[topicNameCameraInfo];
+			}
+			
+			if(!RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.ContainsKey(topicNameImage))
+			{
+				this.tcpClientImage = SIGVerseRosBridgeConnection.GetConnection(rosBridgeIP, sigverseBridgePort);
+
+				RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap.Add(topicNameImage, this.tcpClientImage);
+			}
+			else
+			{
+				this.tcpClientImage = RosConnectionManager.Instance.rosConnections.sigverseRosBridgeTcpClientMap[topicNameImage];
+			}
 
 			this.networkStreamCameraInfo = this.tcpClientCameraInfo.GetStream();
 			this.networkStreamCameraInfo.ReadTimeout  = 100000;
@@ -52,7 +83,7 @@ namespace SIGVerse.ToyotaHSR
 
 
 			// RGB Camera
-			this.rgbCamera = cameraObj.GetComponentInChildren<Camera>();
+			this.rgbCamera = this.cameraFrameObj.GetComponentInChildren<Camera>();
 
 			int imageWidth  = this.rgbCamera.targetTexture.width;
 			int imageHeight = this.rgbCamera.targetTexture.height;
@@ -92,23 +123,68 @@ namespace SIGVerse.ToyotaHSR
 
 			this.imageData = new ImageForSIGVerseBridge(null, (uint)imageHeight, (uint)imageWidth, encoding, isBigendian, step, null);
 
-			this.header = new Header(0, new SIGVerse.ROSBridge.msg_helpers.Time(0, 0), cameraObj.name);
+			this.header = new Header(0, new SIGVerse.RosBridge.msg_helpers.Time(0, 0), this.cameraFrameObj.name);
 
-			this.cameraInfoMsg = new SIGVerseROSBridgeMessage<CameraInfoForSIGVerseBridge>("publish", topicNameCameraInfo, CameraInfoForSIGVerseBridge.GetMessageType(), this.cameraInfoData);
-			this.imageMsg      = new SIGVerseROSBridgeMessage<ImageForSIGVerseBridge>     ("publish", topicNameImage,      ImageForSIGVerseBridge.GetMessageType(),      this.imageData);
+			this.cameraInfoMsg = new SIGVerseRosBridgeMessage<CameraInfoForSIGVerseBridge>("publish", topicNameCameraInfo, CameraInfoForSIGVerseBridge.GetMessageType(), this.cameraInfoData);
+			this.imageMsg      = new SIGVerseRosBridgeMessage<ImageForSIGVerseBridge>     ("publish", topicNameImage,      ImageForSIGVerseBridge.GetMessageType(),      this.imageData);
 
-			this.isPublishingCameraInfo = false;
-			this.isPublishingImage      = false;
+			this.isUsingThread = isUsingThread;
 		}
 
+		//void OnDestroy()
+		//{
+		//	if (this.networkStreamCameraInfo != null) { this.networkStreamCameraInfo.Close(); }
+		//	if (this.networkStreamImage      != null) { this.networkStreamImage     .Close(); }
+
+		//	if (this.tcpClientCameraInfo != null) { this.tcpClientCameraInfo.Close(); }
+		//	if (this.tcpClientImage      != null) { this.tcpClientImage     .Close(); }
+		//}
+
+
+		public void SendMessageInThisFrame()
+		{
+			this.shouldSendMessage = true;
+		}
 
 		public bool IsConnected()
 		{
-			return this.networkStreamCameraInfo != null && this.networkStreamImage !=null;
+			return this.tcpClientCameraInfo.Connected && this.tcpClientImage.Connected && this.networkStreamCameraInfo != null && this.networkStreamImage !=null;
 		}
 
-		public void ReadPixels()
+		public bool IsPublishing()
 		{
+			return this.isPublishingCameraInfo || this.isPublishingImage;
+		}
+
+		public void Close()
+		{
+			if (this.networkStreamCameraInfo != null) { this.networkStreamCameraInfo.Close(); }
+			if (this.networkStreamImage      != null) { this.networkStreamImage     .Close(); }
+
+			if (this.tcpClientCameraInfo != null) { this.tcpClientCameraInfo.Close(); }
+			if (this.tcpClientImage      != null) { this.tcpClientImage     .Close(); }
+		}
+
+
+		//void Update()
+		//{
+		//}
+
+		void OnPostRender()
+		{
+			if(this.shouldSendMessage)
+			{
+				this.shouldSendMessage = false;
+
+				this.PubImage();
+			}
+		}
+
+		private void PubImage()
+		{
+			//System.Diagnostics.Stopwatch sw = new System.Diagnostics.Stopwatch();
+			//sw.Start();
+
 			this.isPublishingCameraInfo = true;
 			this.isPublishingImage      = true;
 
@@ -122,36 +198,26 @@ namespace SIGVerse.ToyotaHSR
 
 			// Convert pixel values for ROS message
 			this.rgbBytes = this.imageTexture.GetRawTextureData();
-		}
 
-		public void UpdateHeader()
-		{
+
 			this.header.Update();
-		}
 
-		public Header GetHeader()
-		{
-			return this.header;
-		}
+//			yield return null;
 
-		public void SetHeaderTime(Header otherHeader)
-		{
-			this.header.seq         = otherHeader.seq;
-			this.header.stamp.secs  = otherHeader.stamp.secs;
-			this.header.stamp.nsecs = otherHeader.stamp.nsecs;
-		}
 
-		public void SendMsg()
-		{
 			//  [camera/rgb/CameraInfo]
 			this.cameraInfoData.header = this.header;
 			this.cameraInfoMsg.msg     = this.cameraInfoData;
 
-			Task.Run(() => 
+			if(this.isUsingThread)
 			{
-				this.cameraInfoMsg.SendMsg(this.networkStreamCameraInfo);
-				this.isPublishingCameraInfo = false;
-			});
+				Thread threadCameraInfo = new Thread(new ThreadStart(SendCameraInfo));
+				threadCameraInfo.Start();
+			}
+			else
+			{
+				this.SendCameraInfo();
+			}
 
 //			yield return null;
 
@@ -161,127 +227,30 @@ namespace SIGVerse.ToyotaHSR
 
 			this.imageMsg.msg = this.imageData;
 
-			Task.Run(() => 
+			if(this.isUsingThread)
 			{
-				this.imageMsg.SendMsg(this.networkStreamImage);
-				this.isPublishingImage = false;
-			});
-		}
-
-		public void OnDestroy()
-		{
-			if (this.networkStreamCameraInfo != null) { this.networkStreamCameraInfo.Close(); }
-			if (this.networkStreamImage      != null) { this.networkStreamImage     .Close(); }
-
-			if (this.tcpClientCameraInfo != null) { this.tcpClientCameraInfo.Close(); }
-			if (this.tcpClientImage      != null) { this.tcpClientImage     .Close(); }
-		}
-
-		public bool IsPublishing()
-		{
-			return this.isPublishingCameraInfo || this.isPublishingImage;
-		}
-	}
-
-
-
-	[RequireComponent(typeof (HSRPubSynchronizer))]
-
-	public class HSRPubStereoRGB : MonoBehaviour
-	{
-		public string rosBridgeIP;
-		public int sigverseBridgePort;
-
-		[HeaderAttribute("Left Camera")]
-		public GameObject leftCameraObj;
-		public string topicNameLeftCameraInfo;
-		public string topicNameLeftImage;
-
-		[HeaderAttribute("Right Camera")]
-		public GameObject rightCameraObj;
-		public string topicNameRightCameraInfo;
-		public string topicNameRightImage;
-
-		[TooltipAttribute("milliseconds")]
-		public float sendingInterval = 250;
-
-		//--------------------------------------------------
-
-		private int publishSequenceNumber;
-
-		private HSRStereoCameraData leftCamera;
-		private HSRStereoCameraData rightCamera;
-
-
-		private float elapsedTime;
-
-
-		void Awake()
-		{
-			this.publishSequenceNumber = HSRPubSynchronizer.GetAssignedSequenceNumber();
-		}
-
-		void Start()
-		{
-			if (this.rosBridgeIP.Equals(string.Empty))
-			{
-				this.rosBridgeIP        = ConfigManager.Instance.configInfo.rosbridgeIP;
+				Thread threadImage = new Thread(new ThreadStart(SendImage));
+				threadImage.Start();
 			}
-			if (this.sigverseBridgePort == 0)
+			else
 			{
-				this.sigverseBridgePort = ConfigManager.Instance.configInfo.sigverseBridgePort;
+				this.SendImage();
 			}
-
-
-			this.leftCamera  = new HSRStereoCameraData(this.rosBridgeIP, this.sigverseBridgePort, this.leftCameraObj,  this.topicNameLeftCameraInfo,  this.topicNameLeftImage,  false);
-			this.rightCamera = new HSRStereoCameraData(this.rosBridgeIP, this.sigverseBridgePort, this.rightCameraObj, this.topicNameRightCameraInfo, this.topicNameRightImage, true);
-		}
-
-		void OnDestroy()
-		{
-			this.leftCamera.OnDestroy();
-			this.rightCamera.OnDestroy();
-		}
-
-		void Update()
-		{
-			if(!this.leftCamera .IsConnected() || !this.rightCamera.IsConnected()) { return; }
-
-			this.elapsedTime += UnityEngine.Time.deltaTime;
-
-			if (this.leftCamera.IsPublishing() || this.rightCamera.IsPublishing() || this.elapsedTime < this.sendingInterval * 0.001f)
-			{
-				return;
-			}
-
-			if(!HSRPubSynchronizer.CanExecute(this.publishSequenceNumber)) { return; }
-
-			this.elapsedTime = 0.0f;
-
-			StartCoroutine(this.PubImage());
-		}
-
-
-		private IEnumerator PubImage()
-		{
-			yield return new WaitForEndOfFrame();
-
-			//System.Diagnostics.Stopwatch sw = new System.Diagnostics.Stopwatch();
-			//sw.Start();
-
-			this.leftCamera .ReadPixels();
-			this.rightCamera.ReadPixels();
-
-			this.leftCamera.UpdateHeader();
-			this.rightCamera.SetHeaderTime(this.leftCamera.GetHeader());
-
-//			yield return null;
-
-			this.leftCamera .SendMsg();
-			this.rightCamera.SendMsg();
 
 			//sw.Stop();
 			//UnityEngine.Debug.Log("time=" + sw.Elapsed);
+		}
+
+		private void SendCameraInfo()
+		{
+			this.cameraInfoMsg.SendMsg(this.networkStreamCameraInfo);
+			this.isPublishingCameraInfo = false;
+		}
+
+		private void SendImage()
+		{
+			this.imageMsg.SendMsg(this.networkStreamImage);
+			this.isPublishingImage = false;
 		}
 	}
 }

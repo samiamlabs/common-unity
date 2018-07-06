@@ -52,7 +52,7 @@ namespace SIGVerse.Competition
 
 			foreach (VideoPlayer targetVideoPlayer in this.targetVideoPlayers)
 			{
-				this.targetVideoPlayerPathMap.Add(WorldPlaybackCommon.GetLinkPath(targetVideoPlayer.transform), targetVideoPlayer);
+				this.targetVideoPlayerPathMap.Add(SIGVerseUtils.GetHierarchyPath(targetVideoPlayer.transform), targetVideoPlayer);
 			}
 		}
 		
@@ -129,6 +129,36 @@ namespace SIGVerse.Competition
 		public List<VideoPlayer> GetTargetVideoPlayers()
 		{
 			return this.targetVideoPlayers;
+		}
+
+
+
+		public static string GetDefinitionLine(List<VideoPlayer> targetVideoPlayers)
+		{
+			string definitionLine = "0.0," + WorldPlaybackCommon.DataType1VideoPlayer + "," + WorldPlaybackCommon.DataType2VideoPlayerDef; // Elapsed time is dummy.
+
+			foreach (VideoPlayer targetVideoPlayer in targetVideoPlayers)
+			{
+				// Make a header line
+				definitionLine += "\t" + SIGVerseUtils.GetHierarchyPath(targetVideoPlayer.transform);
+			}
+
+			return definitionLine;
+		}
+
+		public static string GetDataLine(string elapsedTime, List<VideoPlayer> targetVideoPlayers)
+		{
+			string dataLine = string.Empty;
+
+			// Video Player
+			dataLine += elapsedTime + "," + WorldPlaybackCommon.DataType1VideoPlayer + "," + WorldPlaybackCommon.DataType2VideoPlayerVal;
+
+			foreach (VideoPlayer targetVideoPlayer in targetVideoPlayers)
+			{
+				dataLine += "\t" + targetVideoPlayer.frame;
+			}
+
+			return dataLine;
 		}
 	}
 }

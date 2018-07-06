@@ -3,18 +3,19 @@ using System.IO;
 using System.Net.Sockets;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Bson;
+using SIGVerse.Common;
 
-namespace SIGVerse.SIGVerseROSBridge
+namespace SIGVerse.SIGVerseRosBridge
 {
 	[System.Serializable]
-	public class SIGVerseROSBridgeMessage<ROSMessage>
+	public class SIGVerseRosBridgeMessage<RosMessage>
 	{
 		public string op { get; set; }
 		public string topic { get; set; }
 		public string type { get; set; }
-		public ROSMessage msg { get; set; }
+		public RosMessage msg { get; set; }
 
-		public SIGVerseROSBridgeMessage(string op, string topic, string type, ROSMessage msg)
+		public SIGVerseRosBridgeMessage(string op, string topic, string type, RosMessage msg)
 		{
 			this.op = op;
 			this.topic = topic;
@@ -37,26 +38,16 @@ namespace SIGVerse.SIGVerseROSBridge
 //			System.Diagnostics.Stopwatch sw = new System.Diagnostics.Stopwatch();
 //			sw.Start();
 
-			networkStream.Write(msgBinary, 0, msgBinary.Length);
-
-			// Receive the time gap between Unity and ROS
-			if(networkStream.DataAvailable)
+			try
 			{
-				byte[] byteArray = new byte[256];
-				networkStream.Read(byteArray, 0, byteArray.Length);
-				string message = System.Text.Encoding.UTF8.GetString(byteArray);
-				string[] messageArray = message.Split(',');
-
-				if (messageArray.Length == 3)
+				if(networkStream.CanWrite)
 				{
-					UnityEngine.Debug.Log("Time gap sec=" + messageArray[1] + ", msec=" + messageArray[2]);
-
-					SIGVerse.ROSBridge.std_msgs.Header.SetTimeGap(Int32.Parse(messageArray[1]), Int32.Parse(messageArray[2]));
+					networkStream.Write(msgBinary, 0, msgBinary.Length);
 				}
-				else
-				{
-					UnityEngine.Debug.LogError("Illegal message. Time gap message=" + message);
-				}
+			}
+			catch (ObjectDisposedException exception)
+			{
+				SIGVerseLogger.Warn(exception.Message);
 			}
 
 //			sw.Stop();
