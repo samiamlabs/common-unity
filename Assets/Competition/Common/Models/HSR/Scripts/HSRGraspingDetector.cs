@@ -133,7 +133,7 @@ namespace SIGVerse.ToyotaHSR
 				this.rightCollidingObjects.Add(other.attachedRigidbody);
 			}
 
-			if(this.isHandClosing && this.leftCollidingObjects.Contains(other.attachedRigidbody) && this.rightCollidingObjects.Contains(other.attachedRigidbody))
+			if(this.isHandClosing && this.graspedRigidbody==null && this.leftCollidingObjects.Contains(other.attachedRigidbody) && this.rightCollidingObjects.Contains(other.attachedRigidbody))
 			{
 				this.Grasp(other.attachedRigidbody);
 			}
@@ -199,9 +199,12 @@ namespace SIGVerse.ToyotaHSR
 
 			this.graspedRigidbody.useGravity  = true;
 //			this.graspedRigidbody.isKinematic = false;
-			this.graspedRigidbody.constraints = RigidbodyConstraints.None;
 
-			Destroy(this.graspedRigidbody.gameObject.GetComponent<HSRGraspedObjectFixer>());
+			HSRGraspedObjectFixer graspedObjectFixer = this.graspedRigidbody.gameObject.GetComponent<HSRGraspedObjectFixer>();
+			graspedObjectFixer.enabled = false;
+			Destroy(graspedObjectFixer);
+
+			this.graspedRigidbody.constraints = RigidbodyConstraints.None;
 
 			this.graspedRigidbody = null;
 			this.savedParentObj = null;

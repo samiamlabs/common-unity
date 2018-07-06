@@ -1,73 +1,129 @@
+using SIGVerse.ToyotaHSR;
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using UnityEngine;
-using UnityEngine.Video;
+using UnityEngine.UI;
 
 namespace SIGVerse.Competition
 {
 	[RequireComponent(typeof (TrialPlaybackCommon))]
-	public class TrialPlaybackRecorder : WorldPlaybackRecorder
+	public class TrialPlaybackRecorder : WorldPlaybackRecorder, IScoreHandler, IHSRCollisionHandler, IPanelNoticeHandler
 	{
-		protected List<VideoPlayer> targetVideoPlayers;
+		public GameObject mainPanel;
+		public GameObject scorePanel;
 
-		private TrialPlaybackCommon common;
+		protected ScoreStatus latestScoreStatus = new ScoreStatus();
 
-		protected override void Start()
+		protected Text trialNumberText;
+		protected Text timeLeftValText;
+		protected Text taskMessageText;
+
+		protected Text totalValText;
+
+
+		protected override void Awake()
 		{
-			base.Start();
+			base.Awake();
 
-			// Video Player
-			this.common = this.GetComponent<TrialPlaybackCommon>();
+			if(this.isRecord)
+			{
+				this.trialNumberText = this.mainPanel.transform.Find("TargetsOfHiding/TrialNumberText")             .GetComponent<Text>();
+				this.timeLeftValText = this.mainPanel.transform.Find("TargetsOfHiding/TimeLeftInfo/TimeLeftValText").GetComponent<Text>();
+				this.taskMessageText = this.mainPanel.transform.Find("TargetsOfHiding/TaskMessageText")             .GetComponent<Text>();
 
-			this.targetVideoPlayers = this.common.GetTargetVideoPlayers();
+				this.totalValText = this.scorePanel.transform.Find("TotalValText").GetComponent<Text>();
+			}
 		}
 
 		protected override List<string> GetDefinitionLines()
 		{
-			List<string> definitionLines = base.GetDefinitionLines(); // Transforms
+			List<string> definitionLines = base.GetDefinitionLines();
 
-			if(this.common.IsRecordVideoPlayers())
-			{
-				// Video Player
-				string definitionLine = "0.0," + TrialPlaybackCommon.DataType1VideoPlayer + "," + TrialPlaybackCommon.DataType2VideoPlayerDef; // Elapsed time is dummy.
+			string definitionLine;
 
-				foreach (VideoPlayer targetVideoPlayer in this.targetVideoPlayers)
-				{
-					// Make a header line
-					definitionLine += "\t" + WorldPlaybackCommon.GetLinkPath(targetVideoPlayer.transform);
-				}
+			// Task Info
+			definitionLine = "0.0," + TrialPlaybackCommon.DataType1TaskInfo; // Elapsed time is dummy.
 
-				definitionLines.Add(definitionLine);
-			}
+			definitionLine += "\t"+Regex.Escape(this.trialNumberText.text) + "\t" + Regex.Escape(this.timeLeftValText.text) + "\t" + Regex.Escape(this.taskMessageText.text);
+
+			definitionLines.Add(definitionLine);
+
+			// Score (Initial status of score)
+			definitionLine = "0.0," + TrialPlaybackCommon.DataType1Score; // Elapsed time is dummy.
+
+			definitionLine += "\t0,0," + this.totalValText.text;
+
+			definitionLines.Add(definitionLine);
 
 			return definitionLines;
 		}
 
-		protected override void SaveData()
+
+		protected override void StopRecording()
 		{
-			if (1000.0 * (this.elapsedTime - this.previousRecordedTime) < recordInterval) { return; }
-
-			this.SaveTransforms();   // Transform
-			this.SaveVideoPlayers(); // Video Player
-
-			this.previousRecordedTime = this.elapsedTime;
-		}
-
-		protected virtual void SaveVideoPlayers()
-		{
-			if(!this.common.IsRecordVideoPlayers()){ return; }
-
-			string dataLine = string.Empty;
-
-			// Video Player
-			dataLine += Math.Round(this.elapsedTime, 4, MidpointRounding.AwayFromZero) + "," + TrialPlaybackCommon.DataType1VideoPlayer + "," + TrialPlaybackCommon.DataType2VideoPlayerVal;
-
-			foreach (VideoPlayer targetVideoPlayer in this.targetVideoPlayers)
+			// Add a line of latest total score
+			if( this.latestScoreStatus.Score > 0)
 			{
-				dataLine += "\t" + targetVideoPlayer.frame;
+				this.latestScoreStatus.Total += this.latestScoreStatus.Score;
 			}
 
-			this.dataLines.Add(dataLine);
+			this.latestScoreStatus.Subscore = 0;
+
+			this.dataLines.Add(CreateScoreDataLine(this.latestScoreStatus));
+
+			base.StopRecording();
+		}
+
+		private string CreateScoreDataLine(ScoreStatus scoreStatus)
+		{
+			// Score 
+			string dataLine = this.GetHeaderElapsedTime() + "," + TrialPlaybackCommon.DataType1Score;
+
+			dataLine += "\t" + scoreStatus.Subscore + "," + scoreStatus.Score + "," + scoreStatus.Total;
+
+			return dataLine;
+		}
+
+		private string CreatePanelNoticeDataLine(PanelNoticeStatus panelNoticeStatus)
+		{
+			// Notice of a Panel
+			string dataLine = this.GetHeaderElapsedTime() + "," + TrialPlaybackCommon.DataType1PanelNotice;
+
+			dataLine += "\t" + 
+				Regex.Escape(panelNoticeStatus.Message) + "\t" + 
+				panelNoticeStatus.FontSize + "\t" + 
+				panelNoticeStatus.Color.r + "\t" + panelNoticeStatus.Color.g + "\t" + panelNoticeStatus.Color.b + "\t" + panelNoticeStatus.Color.a + "\t" + 
+				panelNoticeStatus.Duration;
+
+			return dataLine;
+		}
+
+		private string CreateHsrCollisionDataLine(Vector3 contactPoint)
+		{
+			// HSR Collision
+			string dataLine = this.GetHeaderElapsedTime() + "," + TrialPlaybackCommon.DataType1HsrCollision;
+
+			dataLine += "\t" + contactPoint.x + "," + contactPoint.y + "," + contactPoint.z;
+
+			return dataLine;
+		}
+
+		public void OnScoreChange(ScoreStatus scoreStatus)
+		{
+			this.dataLines.Add(this.CreateScoreDataLine(scoreStatus));
+
+			this.latestScoreStatus = scoreStatus;
+		}
+
+		public void OnPanelNoticeChange(PanelNoticeStatus panelNoticeStatus)
+		{
+			this.dataLines.Add(this.CreatePanelNoticeDataLine(panelNoticeStatus));
+		}
+
+		public void OnHsrCollisionEnter(Vector3 contactPoint)
+		{
+			this.dataLines.Add(this.CreateHsrCollisionDataLine(contactPoint));
 		}
 	}
 }
