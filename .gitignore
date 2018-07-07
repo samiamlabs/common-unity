@@ -52,3 +52,7 @@ SIGVerse*.log
 /Assets/OVR*
 /Assets/Plugins*
 
+# Vive VR
+/Assets/SteamVR*
+
+
