@@ -4,7 +4,4 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes:
-  - enabled: 1
-    path: Assets/WRS2018/Common/sample.unity
-    guid: 47405ba0be4b4674fafb8ddd62d61b7a
+  m_Scenes: []
